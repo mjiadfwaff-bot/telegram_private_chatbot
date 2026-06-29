@@ -308,9 +308,15 @@ function parseKeywordFilterConfig(env) {
     const keywords = parseListEnv(env.FILTER_KEYWORDS);
     const chatIds = new Set(parseListEnv(env.FILTER_CHAT_IDS).map(String));
     const notifyChatIds = parseListEnv(env.FILTER_NOTIFY_CHAT_IDS).map(String);
+    const botIds = new Set(parseListEnv(env.FILTER_BOT_IDS).map(String));
+    const botUsernames = new Set(parseListEnv(env.FILTER_BOT_USERNAMES).map(normalizeUsername).filter(Boolean));
     const caseSensitive = String(env.FILTER_CASE_SENSITIVE || "").toLowerCase() === "true";
 
-    return { keywords, chatIds, notifyChatIds, caseSensitive };
+    return { keywords, chatIds, notifyChatIds, botIds, botUsernames, caseSensitive };
+}
+
+function normalizeUsername(value) {
+    return (value || "").toString().trim().replace(/^@/, "").toLowerCase();
 }
 
 function extractFilterableText(msg) {
@@ -333,21 +339,56 @@ function messageMatchesKeywords(msg, config) {
     return null;
 }
 
+function getPotentialMessageSenders(msg) {
+    return [
+        msg.from,
+        msg.via_bot,
+        msg.sender_business_bot,
+        msg.forward_origin?.sender_user,
+        msg.forward_origin?.chat,
+        msg.sender_chat
+    ].filter(Boolean);
+}
+
+function messageMatchesBotSender(msg, config) {
+    if (config.botIds.size === 0 && config.botUsernames.size === 0) return null;
+
+    for (const sender of getPotentialMessageSenders(msg)) {
+        const senderId = sender.id !== undefined && sender.id !== null ? String(sender.id) : "";
+        const username = normalizeUsername(sender.username);
+        const isBot = sender.is_bot === true;
+
+        if (senderId && config.botIds.has(senderId)) {
+            return `bot_id:${senderId}`;
+        }
+        if (username && config.botUsernames.has(username) && (isBot || sender.type === "channel" || sender.type === "supergroup")) {
+            return `bot_username:@${username}`;
+        }
+    }
+
+    const signature = normalizeUsername(msg.author_signature);
+    if (signature && config.botUsernames.has(signature)) {
+        return `author_signature:${msg.author_signature}`;
+    }
+
+    return null;
+}
+
 function formatChatLabel(chat = {}) {
     const title = chat.title || chat.username || chat.first_name || "未知会话";
     const username = chat.username ? `@${chat.username}` : "";
     return [title, username].filter(Boolean).join(" ");
 }
 
-async function notifyKeywordDeletion(env, msg, matchedKeyword, config) {
+async function notifyKeywordDeletion(env, msg, matchReason, config) {
     if (!config.notifyChatIds || config.notifyChatIds.length === 0) return;
 
     const content = extractFilterableText(msg);
     const sender = msg.from ? formatTelegramUser(msg.from) : (msg.sender_chat ? formatChatLabel(msg.sender_chat) : "未知发送者");
     const noticeText = [
-        "🧹 关键词消息已拦截",
+        "🧹 消息已拦截",
         "",
-        `关键词: ${matchedKeyword}`,
+        `命中: ${matchReason}`,
         `来源: ${formatChatLabel(msg.chat)} (${msg.chat.id})`,
         `发送者: ${sender}`,
         `消息ID: ${msg.message_id}`,
@@ -389,7 +430,8 @@ async function notifyKeywordDeletion(env, msg, matchedKeyword, config) {
 
 async function handleKeywordFilteredMessage(msg, env) {
     const config = parseKeywordFilterConfig(env);
-    if (config.keywords.length === 0 || !msg.chat || !msg.message_id) return false;
+    const hasRules = config.keywords.length > 0 || config.botIds.size > 0 || config.botUsernames.size > 0;
+    if (!hasRules || !msg.chat || !msg.message_id) return false;
 
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
@@ -404,9 +446,11 @@ async function handleKeywordFilteredMessage(msg, env) {
     }
 
     const matchedKeyword = messageMatchesKeywords(msg, config);
-    if (!matchedKeyword) return false;
+    const matchedBotSender = messageMatchesBotSender(msg, config);
+    const matchReason = matchedKeyword ? `keyword:${matchedKeyword}` : matchedBotSender;
+    if (!matchReason) return false;
 
-    await notifyKeywordDeletion(env, msg, matchedKeyword, config);
+    await notifyKeywordDeletion(env, msg, matchReason, config);
 
     const res = await tgCall(env, "deleteMessage", {
         chat_id: chatId,
@@ -418,14 +462,14 @@ async function handleKeywordFilteredMessage(msg, env) {
             chatId,
             chatType,
             messageId: msg.message_id,
-            keyword: matchedKeyword
+            matchReason
         });
     } else {
         Logger.warn('keyword_message_delete_failed', {
             chatId,
             chatType,
             messageId: msg.message_id,
-            keyword: matchedKeyword,
+            matchReason,
             errorDescription: res.description
         });
     }
@@ -598,7 +642,12 @@ export default {
       return new Response("OK");
     }
 
-    const msg = update.message;
+    if (update.edited_channel_post) {
+      await handleKeywordFilteredMessage(update.edited_channel_post, normalizedEnv);
+      return new Response("OK");
+    }
+
+    const msg = update.message || update.edited_message;
     if (!msg) return new Response("OK");
 
     ctx.waitUntil(flushExpiredMediaGroups(normalizedEnv, Date.now()));
