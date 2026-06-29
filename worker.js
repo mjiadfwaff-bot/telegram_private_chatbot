@@ -307,9 +307,10 @@ function parseListEnv(raw) {
 function parseKeywordFilterConfig(env) {
     const keywords = parseListEnv(env.FILTER_KEYWORDS);
     const chatIds = new Set(parseListEnv(env.FILTER_CHAT_IDS).map(String));
+    const notifyChatIds = parseListEnv(env.FILTER_NOTIFY_CHAT_IDS).map(String);
     const caseSensitive = String(env.FILTER_CASE_SENSITIVE || "").toLowerCase() === "true";
 
-    return { keywords, chatIds, caseSensitive };
+    return { keywords, chatIds, notifyChatIds, caseSensitive };
 }
 
 function extractFilterableText(msg) {
@@ -332,6 +333,60 @@ function messageMatchesKeywords(msg, config) {
     return null;
 }
 
+function formatChatLabel(chat = {}) {
+    const title = chat.title || chat.username || chat.first_name || "未知会话";
+    const username = chat.username ? `@${chat.username}` : "";
+    return [title, username].filter(Boolean).join(" ");
+}
+
+async function notifyKeywordDeletion(env, msg, matchedKeyword, config) {
+    if (!config.notifyChatIds || config.notifyChatIds.length === 0) return;
+
+    const content = extractFilterableText(msg);
+    const sender = msg.from ? formatTelegramUser(msg.from) : (msg.sender_chat ? formatChatLabel(msg.sender_chat) : "未知发送者");
+    const noticeText = [
+        "🧹 关键词消息已拦截",
+        "",
+        `关键词: ${matchedKeyword}`,
+        `来源: ${formatChatLabel(msg.chat)} (${msg.chat.id})`,
+        `发送者: ${sender}`,
+        `消息ID: ${msg.message_id}`,
+        content ? `内容: ${truncateText(content, 1200)}` : null
+    ].filter(Boolean).join("\n");
+
+    await Promise.allSettled(config.notifyChatIds.map(async (notifyChatId) => {
+        const noticeRes = await tgCall(env, "sendMessage", {
+            chat_id: notifyChatId,
+            text: truncateText(noticeText)
+        });
+
+        if (!noticeRes.ok) {
+            Logger.warn('keyword_notify_text_failed', {
+                notifyChatId,
+                sourceChatId: msg.chat.id,
+                messageId: msg.message_id,
+                errorDescription: noticeRes.description
+            });
+            return;
+        }
+
+        const copyRes = await tgCall(env, "copyMessage", {
+            chat_id: notifyChatId,
+            from_chat_id: msg.chat.id,
+            message_id: msg.message_id
+        });
+
+        if (!copyRes.ok) {
+            Logger.warn('keyword_notify_copy_failed', {
+                notifyChatId,
+                sourceChatId: msg.chat.id,
+                messageId: msg.message_id,
+                errorDescription: copyRes.description
+            });
+        }
+    }));
+}
+
 async function handleKeywordFilteredMessage(msg, env) {
     const config = parseKeywordFilterConfig(env);
     if (config.keywords.length === 0 || !msg.chat || !msg.message_id) return false;
@@ -350,6 +405,8 @@ async function handleKeywordFilteredMessage(msg, env) {
 
     const matchedKeyword = messageMatchesKeywords(msg, config);
     if (!matchedKeyword) return false;
+
+    await notifyKeywordDeletion(env, msg, matchedKeyword, config);
 
     const res = await tgCall(env, "deleteMessage", {
         chat_id: chatId,

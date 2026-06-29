@@ -93,6 +93,7 @@ This is the simplest automated deployment method. Cloudflare will automatically 
         * `SUPERGROUP_ID`: Your group ID (e.g., -100123...).
         * `FILTER_KEYWORDS` (optional): Keywords to delete automatically. Supports multiple values separated by commas, semicolons, or new lines, e.g. `ads,spam,promo link`.
         * `FILTER_CHAT_IDS` (optional): Channel/group IDs to monitor. Supports multiple values separated by commas, semicolons, or new lines. Recommended to avoid deleting messages in unintended chats. If omitted, the `SUPERGROUP_ID` admin group is ignored by default.
+        * `FILTER_NOTIFY_CHAT_IDS` (optional): User/group IDs that receive deletion notices and copied original messages when a keyword matches. Supports multiple values separated by commas, semicolons, or new lines.
         * `FILTER_CASE_SENSITIVE` (optional): Set to `true` for case-sensitive matching. Defaults to case-insensitive matching.
 8.  **Final Step**: After configuration, go to the **Deployments** tab at the top, find the latest deployment record, and click **Retry deployment** on the right to apply variables.
 
@@ -109,7 +110,7 @@ If you don't want to link GitHub, you can copy the code directly.
     * Go to **Settings** -> **Variables**.
     * Add KV Binding: Variable name `TOPIC_MAP`, bind to a KV database.
     * Add Environment Variables: `BOT_TOKEN` and `SUPERGROUP_ID`.
-    * Optionally add keyword deletion variables: `FILTER_KEYWORDS`, `FILTER_CHAT_IDS`, `FILTER_CASE_SENSITIVE`.
+    * Optionally add keyword deletion variables: `FILTER_KEYWORDS`, `FILTER_CHAT_IDS`, `FILTER_NOTIFY_CHAT_IDS`, `FILTER_CASE_SENSITIVE`.
     * Click **Save and Deploy**.
 
 ---
@@ -137,6 +138,7 @@ If it returns `{"ok":true, "result":true, "description":"Webhook was set"}`, the
 2. Grant the bot **Delete messages** permission to delete arbitrary messages in groups, supergroups, and channels.
 3. Matching checks text messages and media captions. The bot only matches and deletes in real time; it does not store message content.
 4. Configure multiple keywords in `FILTER_KEYWORDS` with commas, semicolons, or new lines.
+5. To receive deletion notices, configure `FILTER_NOTIFY_CHAT_IDS`. The bot sends a match summary, copies the original message, then deletes the source message. For personal user IDs, the user must first start a private chat with the bot and send `/start`.
 
 ---
 
