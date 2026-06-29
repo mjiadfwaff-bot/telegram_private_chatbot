@@ -95,7 +95,8 @@ This is the simplest automated deployment method. Cloudflare will automatically 
         * `FILTER_BOT_IDS` (optional): Bot IDs whose messages should be deleted directly. Supports multiple values separated by commas, semicolons, or new lines.
         * `FILTER_BOT_USERNAMES` (optional): Bot usernames whose messages should be deleted directly. Supports multiple values and accepts `soso_bot` or `@soso_bot`.
         * `FILTER_CHAT_IDS` (optional): Channel/group IDs to monitor. Supports multiple values separated by commas, semicolons, or new lines. Recommended to avoid deleting messages in unintended chats. If omitted, the `SUPERGROUP_ID` admin group is ignored by default.
-        * `FILTER_NOTIFY_CHAT_IDS` (optional): User/group IDs that receive deletion notices and copied original messages when a keyword matches. Supports multiple values separated by commas, semicolons, or new lines.
+        * `FILTER_NOTIFY_TOPIC_TITLE` (optional): Auto-created deletion notice topic title. Defaults to `删除通知`.
+        * `FILTER_NOTIFY_CHAT_IDS` (optional): Extra user/group IDs that receive deletion notices and copied original messages in addition to the auto-created notification topic. Supports multiple values separated by commas, semicolons, or new lines.
         * `FILTER_CASE_SENSITIVE` (optional): Set to `true` for case-sensitive matching. Defaults to case-insensitive matching.
 8.  **Final Step**: After configuration, go to the **Deployments** tab at the top, find the latest deployment record, and click **Retry deployment** on the right to apply variables.
 
@@ -112,7 +113,7 @@ If you don't want to link GitHub, you can copy the code directly.
     * Go to **Settings** -> **Variables**.
     * Add KV Binding: Variable name `TOPIC_MAP`, bind to a KV database.
     * Add Environment Variables: `BOT_TOKEN` and `SUPERGROUP_ID`.
-    * Optionally add filter variables: `FILTER_KEYWORDS`, `FILTER_BOT_IDS`, `FILTER_BOT_USERNAMES`, `FILTER_CHAT_IDS`, `FILTER_NOTIFY_CHAT_IDS`, `FILTER_CASE_SENSITIVE`.
+    * Optionally add filter variables: `FILTER_KEYWORDS`, `FILTER_BOT_IDS`, `FILTER_BOT_USERNAMES`, `FILTER_CHAT_IDS`, `FILTER_NOTIFY_TOPIC_TITLE`, `FILTER_NOTIFY_CHAT_IDS`, `FILTER_CASE_SENSITIVE`.
     * Click **Save and Deploy**.
 
 ---
@@ -141,7 +142,8 @@ If it returns `{"ok":true, "result":true, "description":"Webhook was set"}`, the
 3. Matching checks text messages and media captions. The bot only matches and deletes in real time; it does not store message content.
 4. Configure multiple keywords in `FILTER_KEYWORDS` with commas, semicolons, or new lines.
 5. To delete by sender bot instead of keywords, configure `FILTER_BOT_IDS` or `FILTER_BOT_USERNAMES`.
-6. To receive deletion notices, configure `FILTER_NOTIFY_CHAT_IDS`. The bot sends a match summary, copies the original message, then deletes the source message. For personal user IDs, the user must first start a private chat with the bot and send `/start`.
+6. Deletion notices are automatically sent to a dedicated topic in the admin group. If the topic does not exist, the bot creates it automatically. The default title is `删除通知`.
+7. To additionally notify users or other groups, configure `FILTER_NOTIFY_CHAT_IDS`. The bot sends a match summary, copies the original message, then deletes the source message. For personal user IDs, the user must first start a private chat with the bot and send `/start`.
 
 ---
 

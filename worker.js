@@ -381,8 +381,6 @@ function formatChatLabel(chat = {}) {
 }
 
 async function notifyKeywordDeletion(env, msg, matchReason, config) {
-    if (!config.notifyChatIds || config.notifyChatIds.length === 0) return;
-
     const content = extractFilterableText(msg);
     const sender = msg.from ? formatTelegramUser(msg.from) : (msg.sender_chat ? formatChatLabel(msg.sender_chat) : "未知发送者");
     const noticeText = [
@@ -395,37 +393,78 @@ async function notifyKeywordDeletion(env, msg, matchReason, config) {
         content ? `内容: ${truncateText(content, 1200)}` : null
     ].filter(Boolean).join("\n");
 
-    await Promise.allSettled(config.notifyChatIds.map(async (notifyChatId) => {
-        const noticeRes = await tgCall(env, "sendMessage", {
-            chat_id: notifyChatId,
-            text: truncateText(noticeText)
+    const targets = [];
+    const notificationThreadId = await getOrCreateFilterNotificationThread(env);
+    if (notificationThreadId) {
+        targets.push({ chatId: env.SUPERGROUP_ID, threadId: notificationThreadId });
+    }
+    for (const chatId of config.notifyChatIds || []) {
+        targets.push({ chatId, threadId: undefined });
+    }
+
+    await Promise.allSettled(targets.map(target => sendFilterNotification(env, target, msg, noticeText)));
+}
+
+async function sendFilterNotification(env, target, msg, noticeText) {
+    const noticeRes = await tgCall(env, "sendMessage", withMessageThreadId({
+        chat_id: target.chatId,
+        text: truncateText(noticeText)
+    }, target.threadId));
+
+    if (!noticeRes.ok) {
+        Logger.warn('filter_notify_text_failed', {
+            notifyChatId: target.chatId,
+            notifyThreadId: target.threadId,
+            sourceChatId: msg.chat.id,
+            messageId: msg.message_id,
+            errorDescription: noticeRes.description
         });
+        return;
+    }
 
-        if (!noticeRes.ok) {
-            Logger.warn('keyword_notify_text_failed', {
-                notifyChatId,
-                sourceChatId: msg.chat.id,
-                messageId: msg.message_id,
-                errorDescription: noticeRes.description
-            });
-            return;
-        }
+    const copyRes = await tgCall(env, "copyMessage", withMessageThreadId({
+        chat_id: target.chatId,
+        from_chat_id: msg.chat.id,
+        message_id: msg.message_id
+    }, target.threadId));
 
-        const copyRes = await tgCall(env, "copyMessage", {
-            chat_id: notifyChatId,
-            from_chat_id: msg.chat.id,
-            message_id: msg.message_id
+    if (!copyRes.ok) {
+        Logger.warn('filter_notify_copy_failed', {
+            notifyChatId: target.chatId,
+            notifyThreadId: target.threadId,
+            sourceChatId: msg.chat.id,
+            messageId: msg.message_id,
+            errorDescription: copyRes.description
         });
+    }
+}
 
-        if (!copyRes.ok) {
-            Logger.warn('keyword_notify_copy_failed', {
-                notifyChatId,
-                sourceChatId: msg.chat.id,
-                messageId: msg.message_id,
-                errorDescription: copyRes.description
-            });
+async function getOrCreateFilterNotificationThread(env) {
+    const key = "filter_notify_thread";
+    const existing = await safeGetJSON(env, key, null);
+    if (existing && existing.thread_id) {
+        const probe = await probeForumThread(env, existing.thread_id, {
+            reason: "filter_notify_thread_check",
+            doubleCheckOnMissingThreadId: false
+        });
+        if (probe.status === "ok" || probe.status === "probe_invalid") {
+            return existing.thread_id;
         }
-    }));
+        await env.TOPIC_MAP.delete(key);
+        await env.TOPIC_MAP.delete(`thread_ok:${existing.thread_id}`);
+        threadHealthCache.delete(existing.thread_id);
+    }
+
+    const title = (env.FILTER_NOTIFY_TOPIC_TITLE || "删除通知").toString().trim().substring(0, CONFIG.MAX_TITLE_LENGTH) || "删除通知";
+    const res = await tgCall(env, "createForumTopic", { chat_id: env.SUPERGROUP_ID, name: title });
+    if (!res.ok || !res.result?.message_thread_id) {
+        Logger.warn('filter_notify_topic_create_failed', { errorDescription: res.description });
+        return null;
+    }
+
+    const rec = { thread_id: res.result.message_thread_id, title };
+    await env.TOPIC_MAP.put(key, JSON.stringify(rec));
+    return rec.thread_id;
 }
 
 async function handleKeywordFilteredMessage(msg, env) {
