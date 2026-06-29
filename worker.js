@@ -376,6 +376,45 @@ async function handleKeywordFilteredMessage(msg, env) {
     return true;
 }
 
+function truncateText(text, maxLength = 3500) {
+    const value = (text || "").toString();
+    if (value.length <= maxLength) return value;
+    return value.slice(0, maxLength) + "...";
+}
+
+function formatTelegramUser(user = {}) {
+    const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+    const username = user.username ? `@${user.username}` : "";
+    return [name, username].filter(Boolean).join(" ") || "未知用户";
+}
+
+async function notifyAdminError(env, action, error, data = {}) {
+    try {
+        const errorText = error instanceof Error ? error.message : String(error);
+        const user = data.user || {};
+        const text = [
+            "⚠️ 机器人处理异常",
+            "",
+            `动作: ${action}`,
+            `错误: ${truncateText(errorText, 1200)}`,
+            data.userId ? `用户ID: ${data.userId}` : null,
+            data.userId ? `用户: ${formatTelegramUser(user)}` : null,
+            "",
+            "常见原因: SUPERGROUP_ID 错误、机器人不是管理群管理员、未开启 Topics、缺少 Manage Topics/Delete messages 权限。"
+        ].filter(Boolean).join("\n");
+
+        await tgCall(env, "sendMessage", {
+            chat_id: env.SUPERGROUP_ID,
+            text: truncateText(text)
+        });
+    } catch (notifyError) {
+        Logger.warn('admin_error_notify_failed', {
+            action,
+            error: notifyError instanceof Error ? notifyError.message : String(notifyError)
+        });
+    }
+}
+
 async function isAdminUser(env, userId) {
     const allowlist = parseAdminIdAllowlist(env);
     if (allowlist && allowlist.has(String(userId))) return true;
@@ -519,6 +558,10 @@ export default {
         const errText = `⚠️ 系统繁忙，请稍后再试。`;
         await tgCall(normalizedEnv, "sendMessage", { chat_id: msg.chat.id, text: errText });
         Logger.error('private_message_failed', e, { userId: msg.chat.id });
+        ctx.waitUntil(notifyAdminError(normalizedEnv, 'private_message_failed', e, {
+            userId: msg.chat.id,
+            user: msg.from
+        }));
       }
       return new Response("OK");
     }
