@@ -296,6 +296,86 @@ function parseAdminIdAllowlist(env) {
     return set.size > 0 ? set : null;
 }
 
+function parseListEnv(raw) {
+    return (raw || "")
+        .toString()
+        .split(/[,;\n]+/g)
+        .map(s => s.trim())
+        .filter(Boolean);
+}
+
+function parseKeywordFilterConfig(env) {
+    const keywords = parseListEnv(env.FILTER_KEYWORDS);
+    const chatIds = new Set(parseListEnv(env.FILTER_CHAT_IDS).map(String));
+    const caseSensitive = String(env.FILTER_CASE_SENSITIVE || "").toLowerCase() === "true";
+
+    return { keywords, chatIds, caseSensitive };
+}
+
+function extractFilterableText(msg) {
+    return [
+        msg.text,
+        msg.caption
+    ].filter(Boolean).join("\n");
+}
+
+function messageMatchesKeywords(msg, config) {
+    const content = extractFilterableText(msg);
+    if (!content || config.keywords.length === 0) return null;
+
+    const haystack = config.caseSensitive ? content : content.toLowerCase();
+    for (const keyword of config.keywords) {
+        const needle = config.caseSensitive ? keyword : keyword.toLowerCase();
+        if (needle && haystack.includes(needle)) return keyword;
+    }
+
+    return null;
+}
+
+async function handleKeywordFilteredMessage(msg, env) {
+    const config = parseKeywordFilterConfig(env);
+    if (config.keywords.length === 0 || !msg.chat || !msg.message_id) return false;
+
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const canMonitorChatType = chatType === "group" || chatType === "supergroup" || chatType === "channel";
+    if (!canMonitorChatType) return false;
+
+    // 未显式配置 FILTER_CHAT_IDS 时，默认不处理客服管理群，避免误删话题内的正常沟通。
+    if (config.chatIds.size > 0) {
+        if (!config.chatIds.has(chatId)) return false;
+    } else if (chatId === String(env.SUPERGROUP_ID)) {
+        return false;
+    }
+
+    const matchedKeyword = messageMatchesKeywords(msg, config);
+    if (!matchedKeyword) return false;
+
+    const res = await tgCall(env, "deleteMessage", {
+        chat_id: chatId,
+        message_id: msg.message_id
+    });
+
+    if (res.ok) {
+        Logger.info('keyword_message_deleted', {
+            chatId,
+            chatType,
+            messageId: msg.message_id,
+            keyword: matchedKeyword
+        });
+    } else {
+        Logger.warn('keyword_message_delete_failed', {
+            chatId,
+            chatType,
+            messageId: msg.message_id,
+            keyword: matchedKeyword,
+            errorDescription: res.description
+        });
+    }
+
+    return true;
+}
+
 async function isAdminUser(env, userId) {
     const allowlist = parseAdminIdAllowlist(env);
     if (allowlist && allowlist.has(String(userId))) return true;
@@ -417,10 +497,19 @@ export default {
       return new Response("OK");
     }
 
+    if (update.channel_post) {
+      await handleKeywordFilteredMessage(update.channel_post, normalizedEnv);
+      return new Response("OK");
+    }
+
     const msg = update.message;
     if (!msg) return new Response("OK");
 
     ctx.waitUntil(flushExpiredMediaGroups(normalizedEnv, Date.now()));
+
+    if (await handleKeywordFilteredMessage(msg, normalizedEnv)) {
+      return new Response("OK");
+    }
 
     if (msg.chat && msg.chat.type === "private") {
       try {

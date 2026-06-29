@@ -37,6 +37,7 @@ Version 4.0 removes all unstable external API dependencies, focusing on **extrem
 | **💬 Topic Group Management** | Utilizes **Telegram Forum Topics** to automatically create a separate topic for each private chat user, isolating messages for organized management. |
 | **👮 Invisible Command System** | Automatically **intercepts** commands starting with `/` sent by users to prevent harassment. Admin commands are only effective within the administrator group. |
 | **🔒 Permission Control** | Powerful command set: Supports **Ban (/ban)**, **Unban (/unban)**, **Close Ticket (/close)**, and **Trust (/trust)** operations. |
+| **🧹 Channel/Group Keyword Deletion** | Configure multiple keywords via environment variables. The bot listens to target channels/groups and deletes matching messages without storing message content. |
 | **☁️ Serverless** | Runs entirely on Cloudflare Workers. **Zero cost**, server-free, maintenance-free, and handles high concurrency. |
 | **📸 Multimedia Support** | Perfectly supports two-way forwarding of text, images, videos, files, and other message formats without losing any details. |
 
@@ -90,6 +91,9 @@ This is the simplest automated deployment method. Cloudflare will automatically 
     * **Add Environment Variables**:
         * `BOT_TOKEN`: Your bot token.
         * `SUPERGROUP_ID`: Your group ID (e.g., -100123...).
+        * `FILTER_KEYWORDS` (optional): Keywords to delete automatically. Supports multiple values separated by commas, semicolons, or new lines, e.g. `ads,spam,promo link`.
+        * `FILTER_CHAT_IDS` (optional): Channel/group IDs to monitor. Supports multiple values separated by commas, semicolons, or new lines. Recommended to avoid deleting messages in unintended chats. If omitted, the `SUPERGROUP_ID` admin group is ignored by default.
+        * `FILTER_CASE_SENSITIVE` (optional): Set to `true` for case-sensitive matching. Defaults to case-insensitive matching.
 8.  **Final Step**: After configuration, go to the **Deployments** tab at the top, find the latest deployment record, and click **Retry deployment** on the right to apply variables.
 
 ### Method 2: Manual Deployment (Simple & Direct)
@@ -105,6 +109,7 @@ If you don't want to link GitHub, you can copy the code directly.
     * Go to **Settings** -> **Variables**.
     * Add KV Binding: Variable name `TOPIC_MAP`, bind to a KV database.
     * Add Environment Variables: `BOT_TOKEN` and `SUPERGROUP_ID`.
+    * Optionally add keyword deletion variables: `FILTER_KEYWORDS`, `FILTER_CHAT_IDS`, `FILTER_CASE_SENSITIVE`.
     * Click **Save and Deploy**.
 
 ---
@@ -119,7 +124,19 @@ Regardless of the deployment method, you must manually tell Telegram your Worker
     ```
     *Replace `<YOUR_TOKEN>` with your bot token, and `<YOUR_WORKER_URL>` with your Worker's full domain or custom domain (e.g., `https://xxx.workers.dev`).*
 
+If you need to listen to channel posts, make sure the webhook allows `channel_post` updates, for example:
+    ```
+    https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>&allowed_updates=["message","channel_post","callback_query"]
+    ```
+
 If it returns `{"ok":true, "result":true, "description":"Webhook was set"}`, the deployment is successful!
+
+### Keyword Auto-Deletion
+
+1. Add the bot to the channel or group you want to monitor and make it an administrator.
+2. Grant the bot **Delete messages** permission to delete arbitrary messages in groups, supergroups, and channels.
+3. Matching checks text messages and media captions. The bot only matches and deletes in real time; it does not store message content.
+4. Configure multiple keywords in `FILTER_KEYWORDS` with commas, semicolons, or new lines.
 
 ---
 
